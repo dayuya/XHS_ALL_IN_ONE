@@ -7,7 +7,10 @@ from typing import Optional
 from xhs_utils.xhs_core.http import BrowserHttpClient
 
 
-CREATOR_IMPERSONATE = 'chrome146'
+# The currently captured Creator publish page is Chrome 152.  curl_cffi 0.16.2
+# does not ship a Chrome 152 profile yet; chrome150 is its newest supported
+# profile and is materially closer to the browser than the old chrome146 one.
+CREATOR_IMPERSONATE = 'chrome150'
 CREATOR_ACCEPT_ENCODING = 'gzip, deflate, br, zstd'
 CREATOR_HTTP_VERSION = 'v2tls'
 
