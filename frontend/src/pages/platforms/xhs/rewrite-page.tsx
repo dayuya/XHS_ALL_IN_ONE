@@ -17,7 +17,6 @@ import {
   SaveOutlined,
   SendOutlined,
   TagsOutlined,
-  VideoCameraOutlined,
 } from "@ant-design/icons";
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
@@ -48,12 +47,13 @@ import {
   Typography,
   Upload,
 } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { PageHeader } from "../../../components/layout/app-shell";
 import {
   addDraftAsset,
+  createDraftFromNote,
   deleteDraft,
   deleteDraftAsset,
   fetchDraftAssets,
@@ -208,6 +208,8 @@ export function XhsDraftsPage() {
   const [sourceAssets, setSourceAssets] = useState<DraftAsset[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [pendingAssetOperations, setPendingAssetOperations] = useState(0);
   const [isRewriting, setIsRewriting] = useState(false);
   const [isPolishingTitles, setIsPolishingTitles] = useState(false);
   const [isPolishingTags, setIsPolishingTags] = useState(false);
@@ -235,6 +237,8 @@ export function XhsDraftsPage() {
   const [refPickerUrlInput, setRefPickerUrlInput] = useState("");
 
   const selectedDraft = drafts.find((draft) => draft.id === selectedDraftId) ?? null;
+  const selectedDraftIdRef = useRef(selectedDraftId);
+  selectedDraftIdRef.current = selectedDraftId;
   const imageAssets = sourceAssets.filter((a) => a.asset_type === "image");
   const hasImageAssets = imageAssets.length > 0;
   const hasVideoAssets = sourceAssets.some((a) => a.asset_type === "video");
@@ -261,70 +265,62 @@ export function XhsDraftsPage() {
     });
   }
 
-  function handleRemoveAsset(assetId: number) {
+  async function handleRemoveAsset(assetId: number) {
     const draftId = selectedDraft?.id;
-    setSourceAssets((prev) => prev.filter((a) => a.id !== assetId));
-    if (draftId && assetId > 0) {
-      void deleteDraftAsset(draftId, assetId).catch(() => {});
+    if (!draftId) return;
+    setPendingAssetOperations((count) => count + 1);
+    try {
+      await deleteDraftAsset(draftId, assetId);
+      if (selectedDraftIdRef.current === draftId) {
+        setSourceAssets((prev) => prev.filter((a) => a.id !== assetId));
+      }
+    } catch {
+      antMessage.error("移除素材失败，请重试。");
+    } finally {
+      setPendingAssetOperations((count) => count - 1);
     }
   }
 
   function handleFileUpload(file: File): false {
     const draftId = selectedDraft?.id;
+    if (!draftId) { antMessage.warning("请先新建或选择草稿。"); return false; }
+    setPendingAssetOperations((count) => count + 1);
     (async () => {
       try {
         const uploaded = await uploadAssetFile(file);
-        if (draftId) {
-          const saved = await addDraftAsset(draftId, {
-            asset_type: uploaded.asset_type,
-            url: uploaded.download_url,
-            local_path: uploaded.file_name,
-          });
-          setSourceAssets((prev) => [...prev, saved]);
-        } else {
-          setSourceAssets((prev) => [...prev, {
-            id: -(Date.now()),
-            draft_id: 0,
-            asset_type: uploaded.asset_type,
-            url: uploaded.download_url,
-            local_path: uploaded.file_name,
-            sort_order: prev.length,
-          }]);
-        }
+        const saved = await addDraftAsset(draftId, {
+          asset_type: uploaded.asset_type,
+          url: uploaded.download_url,
+          local_path: uploaded.file_name,
+        });
+        if (selectedDraftIdRef.current === draftId) setSourceAssets((prev) => [...prev, saved]);
         antMessage.success("文件上传成功");
       } catch {
         antMessage.error("文件上传失败");
+      } finally {
+        setPendingAssetOperations((count) => count - 1);
       }
     })();
     return false;
   }
 
-  function handleUrlAdd() {
+  async function handleUrlAdd() {
     const trimmed = assetUrl.trim();
     if (!trimmed) { antMessage.warning("请输入素材链接。"); return; }
     if (!isValidUrl(trimmed)) { antMessage.error("链接格式不正确，请输入 http:// 或 https:// 开头的链接。"); return; }
     const assetType = getAssetTypeFromUrl(trimmed);
     const draftId = selectedDraft?.id;
-    if (draftId) {
-      (async () => {
-        try {
-          const saved = await addDraftAsset(draftId, { asset_type: assetType, url: trimmed });
-          setSourceAssets((prev) => [...prev, saved]);
-          setAssetUrl("");
-          setUploadModalOpen(false);
-        } catch { antMessage.error("添加素材失败"); }
-      })();
-    } else {
-      setSourceAssets((prev) => [...prev, {
-        id: -(Date.now()),
-        draft_id: 0,
-        asset_type: assetType,
-        url: trimmed,
-        local_path: "",
-        sort_order: prev.length,
-      }]);
+    if (!draftId) { antMessage.warning("请先新建或选择草稿。"); return; }
+    setPendingAssetOperations((count) => count + 1);
+    try {
+      const saved = await addDraftAsset(draftId, { asset_type: assetType, url: trimmed });
+      if (selectedDraftIdRef.current === draftId) setSourceAssets((prev) => [...prev, saved]);
       setAssetUrl("");
       setUploadModalOpen(false);
+    } catch {
+      antMessage.error("添加素材失败");
+    } finally {
+      setPendingAssetOperations((count) => count - 1);
     }
   }
 
@@ -332,30 +328,29 @@ export function XhsDraftsPage() {
     setSelectedAssetUrls(prev => prev.includes(url) ? prev.filter(u => u !== url) : [...prev, url]);
   }
 
-  function handleAddSelectedAssets() {
+  async function handleAddSelectedAssets() {
     const draftId = selectedDraft?.id;
-    (async () => {
+    if (!draftId) { antMessage.warning("请先新建或选择草稿。"); return; }
+    setPendingAssetOperations((count) => count + 1);
+    const failed: string[] = [];
+    let added = 0;
+    try {
       for (const url of selectedAssetUrls) {
-        if (draftId) {
-          try {
-            const saved = await addDraftAsset(draftId, { asset_type: "image", url });
-            setSourceAssets(prev => [...prev, saved]);
-          } catch { /* ignore individual failures */ }
-        } else {
-          setSourceAssets(prev => [...prev, {
-            id: -(Date.now() + Math.random()),
-            draft_id: 0,
-            asset_type: "image",
-            url,
-            local_path: "",
-            sort_order: prev.length,
-          }]);
+        try {
+          const saved = await addDraftAsset(draftId, { asset_type: "image", url });
+          if (selectedDraftIdRef.current === draftId) setSourceAssets(prev => [...prev, saved]);
+          added += 1;
+        } catch {
+          failed.push(url);
         }
       }
-      setSelectedAssetUrls([]);
-      setUploadModalOpen(false);
-      antMessage.success(`已添加 ${selectedAssetUrls.length} 个图片`);
-    })();
+      setSelectedAssetUrls(failed);
+      setUploadModalOpen(failed.length > 0);
+      if (added) antMessage.success(`已添加 ${added} 张图片`);
+      if (failed.length) antMessage.error(`${failed.length} 张图片添加失败，可重试。`);
+    } finally {
+      setPendingAssetOperations((count) => count - 1);
+    }
   }
 
   function clearStatus() {
@@ -364,6 +359,15 @@ export function XhsDraftsPage() {
   }
 
   function selectDraft(draft: Draft, mode: AiContentMode = "rewrite") {
+    if (draft.id !== selectedDraftId) {
+      setSourceNote(null);
+      setSourceAssets([]);
+      setRewritePreview(null);
+      setTitleOptions([]);
+      setTagOptions([]);
+      setNewTagInput("");
+      setIsAddingTag(false);
+    }
     setActiveMode(mode);
     setSelectedDraftId(draft.id);
     setTitle(draft.title);
@@ -430,6 +434,27 @@ export function XhsDraftsPage() {
     selectDraft(draft, mode);
   }
 
+  async function handleCreateBlankDraft() {
+    setIsCreating(true);
+    clearStatus();
+    try {
+      const draft = await createDraftFromNote({ platform: "xhs", title: "", body: "" });
+      upsertDraft(draft, "rewrite");
+      setMessage("空白草稿已创建，可以直接填写内容并添加图片或视频。");
+    } catch {
+      setError("创建草稿失败，请稍后重试。");
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  function currentTags() {
+    const name = newTagInput.trim();
+    return name && !draftTags.some((tag) => tag.name === name)
+      ? [...draftTags, { id: "", name }]
+      : draftTags;
+  }
+
   async function handleSave() {
     if (!selectedDraft) {
       setError("请先选择或生成一个草稿。");
@@ -438,8 +463,10 @@ export function XhsDraftsPage() {
     setIsSaving(true);
     clearStatus();
     try {
-      const updated = await updateDraft(selectedDraft.id, { title, body, tags: draftTags });
+      const updated = await updateDraft(selectedDraft.id, { title, body, tags: currentTags() });
       upsertDraft(updated);
+      setNewTagInput("");
+      setIsAddingTag(false);
       setMessage(`草稿 #${updated.id} 已保存。`);
     } catch {
       setError("草稿保存失败。");
@@ -462,7 +489,7 @@ export function XhsDraftsPage() {
         reference,
         instruction,
       });
-      upsertDraft(draft, "generate");
+      upsertDraft(draft, "rewrite");
       setMessage(`已生成草稿 #${draft.id}，可继续编辑或送入发布中心。`);
     } catch {
       setError("AI 生成笔记失败，请确认已配置默认文本模型。");
@@ -480,7 +507,7 @@ export function XhsDraftsPage() {
     clearStatus();
     setRewritePreview(null);
     try {
-      const saved = await updateDraft(selectedDraft.id, { title, body });
+      const saved = await updateDraft(selectedDraft.id, { title, body, tags: currentTags() });
       const rewritten = await rewriteDraftWithAi({ draft_id: saved.id, instruction: systemPrompt + "\n" + instruction });
       setRewritePreview(rewritten.body);
       setMessage("AI 改写完成，请在下方对比后决定是否采用。");
@@ -544,6 +571,10 @@ export function XhsDraftsPage() {
   }
 
   async function handleSendToPublish() {
+    if (pendingAssetOperations > 0) {
+      setError("素材正在处理中，请完成后再送入发布中心。");
+      return;
+    }
     if (!selectedDraft) {
       setError("请先选择一个草稿。");
       return;
@@ -551,11 +582,13 @@ export function XhsDraftsPage() {
     setIsSendingPublish(true);
     clearStatus();
     try {
-      const saved = await updateDraft(selectedDraft.id, { title, body });
+      const saved = await updateDraft(selectedDraft.id, { title, body, tags: currentTags() });
       const job = await sendDraftToPublish(saved.id, {
         publish_mode: "immediate",
       });
       upsertDraft(saved);
+      setNewTagInput("");
+      setIsAddingTag(false);
       setMessage(`已送入发布中心，发布任务 #${job.id}。请前往发布中心选择账号并发布。`);
     } catch (err: unknown) {
       const d = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -642,9 +675,12 @@ export function XhsDraftsPage() {
                 description={
                   <div>
                     <Paragraph type="secondary">还没有可编辑草稿。</Paragraph>
-                    <Link to="/platforms/xhs/library">
-                      <Button size="small">去内容库选择笔记</Button>
-                    </Link>
+                    <Space direction="vertical">
+                      <Button type="primary" size="small" onClick={handleCreateBlankDraft} loading={isCreating}>新建空白草稿</Button>
+                      <Link to="/platforms/xhs/library">
+                        <Button size="small">去内容库选择笔记</Button>
+                      </Link>
+                    </Space>
                   </div>
                 }
                 style={{ padding: 24 }}
@@ -699,7 +735,7 @@ export function XhsDraftsPage() {
         <Col xs={24} lg={12}>
           {sourceNote && (
             <Card
-              title="草稿内容"
+              title="参考原文"
               size="small"
               style={{ marginBottom: 16 }}
               extra={
@@ -720,7 +756,21 @@ export function XhsDraftsPage() {
               >
                 {sourceNote.content}
               </Paragraph>
-
+            </Card>
+          )}
+          {selectedDraft && (
+            <Card
+              title={`草稿素材 (${sourceAssets.length})`}
+              size="small"
+              style={{ marginBottom: 16 }}
+              extra={<Button size="small" icon={<PlusOutlined />} onClick={() => setUploadModalOpen(true)}>添加素材</Button>}
+            >
+              {sourceAssets.length === 0 && (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有素材，添加图片或视频后即可用于发布。">
+                  <Button icon={<InboxOutlined />} onClick={() => setUploadModalOpen(true)}>上传图片或视频</Button>
+                </Empty>
+              )}
+              {pendingAssetOperations > 0 && <Text type="secondary">素材处理中，请完成后再送入发布中心。</Text>}
               {hasImageAssets && (
                 <div style={{ marginBottom: 8 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -762,14 +812,13 @@ export function XhsDraftsPage() {
                     <div key={asset.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                       <Button
                         type="link" size="small" icon={<PlayCircleOutlined />}
-                        href={asset.url || sourceNote.video_url} target="_blank" rel="noopener noreferrer"
+                        href={asset.url || (asset.local_path ? `/api/files/media/${encodeURIComponent(asset.local_path)}` : undefined)} target="_blank" rel="noopener noreferrer"
                       >
                         查看视频
                       </Button>
-                      <Button type="text" size="small" icon={<EditOutlined />}
-                        onClick={() => { setOptimizeAssetId(asset.id); setOptimizeModalOpen(true); }}
-                        style={{ color: "#1668dc" }}
-                      />
+                      <Popconfirm title="移除此视频？" onConfirm={() => handleRemoveAsset(asset.id)}>
+                        <Button type="text" danger size="small" icon={<DeleteOutlined />} aria-label="移除视频" />
+                      </Popconfirm>
                     </div>
                   ))}
                 </div>
@@ -796,16 +845,18 @@ export function XhsDraftsPage() {
                 <Input
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="生成或选择一个标题"
+                  placeholder="输入标题，也可以使用 AI 润色"
                   size="large"
+                  disabled={!selectedDraft}
                 />
               </Form.Item>
               <Form.Item label="正文" style={{ marginBottom: 16 }}>
                 <TextArea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  placeholder="正文生成后可在这里继续编辑。"
+                  placeholder="在这里撰写正文，也可以使用 AI 改写。"
                   rows={16}
+                  disabled={!selectedDraft}
                   style={{ fontFamily: "monospace" }}
                 />
               </Form.Item>
@@ -991,7 +1042,7 @@ export function XhsDraftsPage() {
               <Button
                 onClick={handleSendToPublish}
                 loading={isSendingPublish}
-                disabled={!selectedDraft}
+                disabled={!selectedDraft || pendingAssetOperations > 0}
                 block
                 type="primary"
                 icon={<SendOutlined />}
@@ -1139,9 +1190,7 @@ export function XhsDraftsPage() {
                     </Space>
                   </div>
                 ) : (
-                  <Button block icon={<VideoCameraOutlined />} disabled>
-                    视频润色（即将上线）
-                  </Button>
+                  <Text type="secondary">视频支持上传、查看和移除；需要剪辑时，请先在视频编辑工具处理后上传。</Text>
                 )}
               </div>
             );
@@ -1350,9 +1399,12 @@ export function XhsDraftsPage() {
         title="草稿工坊"
         description="管理草稿、编辑内容和素材、AI 改写润色，生成结果送入发布中心。"
         action={
-          <Button icon={<ReloadOutlined />} onClick={loadDrafts} loading={isLoading}>
-            刷新草稿
-          </Button>
+          <Space>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreateBlankDraft} loading={isCreating}>新建空白草稿</Button>
+            <Button icon={<ReloadOutlined />} onClick={loadDrafts} loading={isLoading}>
+              刷新草稿
+            </Button>
+          </Space>
         }
       />
 

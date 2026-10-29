@@ -4211,6 +4211,60 @@ def test_drafts_api_creates_from_owned_note_and_lists_current_user_only(tmp_path
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_blank_draft_media_and_topics_survive_reload_and_send_to_publish(tmp_path):
+    db_dependency = _override_database(tmp_path)
+    try:
+        owner_token = _register_and_get_access_token("blank-draft-owner")
+        intruder_token = _register_and_get_access_token("blank-draft-intruder")
+        headers = {"Authorization": f"Bearer {owner_token}"}
+        intruder_headers = {"Authorization": f"Bearer {intruder_token}"}
+        response = client.post("/api/drafts", headers=headers, json={"platform": "xhs"})
+        assert response.status_code == 200
+        draft = response.json()
+        assert draft["source_note_id"] is None
+        assert draft["title"] == draft["body"] == ""
+        draft_url = f"/api/drafts/{draft['id']}"
+
+        image = client.post(
+            f"{draft_url}/assets", headers=headers,
+            json={"asset_type": "image", "url": "/api/files/media/blank-test.png", "local_path": "blank-test.png"},
+        )
+        video = client.post(
+            f"{draft_url}/assets", headers=headers,
+            json={"asset_type": "video", "url": "https://example.com/blank-test.mp4"},
+        )
+        assert image.status_code == video.status_code == 200
+        video_id = video.json()["id"]
+        assert client.delete(f"{draft_url}/assets/{video_id}", headers=intruder_headers).status_code == 404
+        assert client.delete(f"{draft_url}/assets/{video_id}", headers=headers).status_code == 200
+        assets = client.get(f"{draft_url}/assets", headers=headers).json()["items"]
+        assert [asset["id"] for asset in assets] == [image.json()["id"]]
+
+        tags = [{"id": "", "name": "海报设计"}]
+        saved = client.patch(
+            draft_url, headers=headers,
+            json={"title": "手写标题", "body": "手写正文", "tags": tags},
+        )
+        assert saved.status_code == 200
+        reloaded = client.get("/api/drafts?platform=xhs", headers=headers).json()["items"][0]
+        assert reloaded["tags"] == tags
+        assert reloaded["source_note_id"] is None
+
+        sent = client.post(f"{draft_url}/send-to-publish", headers=headers, json={})
+        assert sent.status_code == 200
+        job = sent.json()
+        assert job["status"] == "pending"
+        assert job["platform_account_id"] is None
+        assert job["title"] == "手写标题"
+        assert job["body"] == "手写正文"
+        assert job["publish_options"]["draft_tags"] == tags
+        publish_assets = client.get(f"/api/publish/jobs/{job['id']}/assets", headers=headers).json()["items"]
+        assert len(publish_assets) == 1
+        assert publish_assets[0]["file_path"] == "/api/files/media/blank-test.png"
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
 def test_drafts_api_rejects_cross_user_source_note(tmp_path):
     db_dependency, owner_token, owner_account_id = _create_pc_account_with_cookie(tmp_path, "draft-source-owner")
     intruder_token = _register_and_get_access_token("draft-source-intruder")
