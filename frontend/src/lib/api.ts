@@ -801,7 +801,7 @@ export async function createXhsCreatorQrLoginSession(): Promise<XhsQrLoginSessio
 }
 
 export async function pollXhsLoginSession(sessionId: number): Promise<XhsQrLoginSession> {
-  const response = await http.get<XhsQrLoginSession>(`/xhs/login-sessions/${sessionId}`);
+  const response = await http.get<XhsQrLoginSession>(`/xhs/login-sessions/${sessionId}`, { _silent: true } as never);
   return response.data;
 }
 

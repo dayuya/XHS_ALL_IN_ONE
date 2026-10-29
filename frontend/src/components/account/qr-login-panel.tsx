@@ -18,34 +18,42 @@ export function QrLoginPanel({ accountType, onConfirmed }: QrLoginPanelProps) {
   const [statusText, setStatusText] = useState("准备生成二维码");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [syncCreator, setSyncCreator] = useState(false);
   const confirmedRef = useRef(false);
+  const pollingRef = useRef(false);
+  const generationRef = useRef(0);
 
-  function errorMessage(error: unknown): string {
+  function errorMessage(error: unknown, fallback = "二维码生成失败，请稍后重试。"): string {
     if (axios.isAxiosError(error)) {
       const detail = error.response?.data?.detail;
       if (typeof detail === "string" && detail) {
         return detail;
       }
     }
-    return "二维码生成失败，请稍后重试。";
+    return fallback;
   }
 
   async function startSession() {
+    const requestId = ++generationRef.current;
     setIsLoading(true);
     setError(null);
+    setWarning(null);
+    setSession(null);
+    setStatusText("正在生成新的二维码");
     confirmedRef.current = false;
     try {
       const nextSession =
         accountType === "pc"
           ? await createXhsPcQrLoginSession({ sync_creator: syncCreator })
           : await createXhsCreatorQrLoginSession();
+      if (requestId !== generationRef.current) return;
       setSession(nextSession);
       setStatusText(accountType === "pc" ? "请使用小红书 App 扫描二维码" : "请使用小红书 App 扫描 Creator 二维码");
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (requestId === generationRef.current) setError(errorMessage(caught));
     } finally {
-      setIsLoading(false);
+      if (requestId === generationRef.current) setIsLoading(false);
     }
   }
 
@@ -58,9 +66,21 @@ export function QrLoginPanel({ accountType, onConfirmed }: QrLoginPanelProps) {
       return;
     }
 
-    const interval = window.setInterval(async () => {
+    const sessionId = session.session_id;
+    let cancelled = false;
+    let timer: number | undefined;
+    async function poll() {
+      if (cancelled) return;
+      if (pollingRef.current) {
+        timer = window.setTimeout(poll, 300);
+        return;
+      }
+      pollingRef.current = true;
+      let finished = false;
       try {
-        const polled = await pollXhsLoginSession(session.session_id);
+        const polled = await pollXhsLoginSession(sessionId);
+        if (cancelled) return;
+        setError(null);
         setSession((current) => ({
           ...polled,
           qr_image_data_url: polled.qr_image_data_url ?? current?.qr_image_data_url
@@ -68,18 +88,30 @@ export function QrLoginPanel({ accountType, onConfirmed }: QrLoginPanelProps) {
         if (polled.status === "scanned") {
           setStatusText("已扫码，请在手机端确认登录");
         } else if (polled.status === "expired") {
+          finished = true;
           setStatusText("二维码已过期，请刷新");
-        } else if (polled.status === "confirmed" && polled.account && !confirmedRef.current) {
-          confirmedRef.current = true;
+        } else if (polled.status === "confirmed") {
+          finished = true;
           setStatusText("账号绑定成功");
-          onConfirmed(polled.account);
+          setWarning(polled.creator_sync_warning ?? null);
+          if (polled.account && !confirmedRef.current) {
+            confirmedRef.current = true;
+            onConfirmed(polled.account);
+          }
         }
-      } catch {
-        setError("轮询登录状态失败，正在等待下一次尝试。");
+      } catch (caught) {
+        if (!cancelled) setError(errorMessage(caught, "登录状态检查暂时失败，正在重试。"));
+      } finally {
+        pollingRef.current = false;
+        if (!cancelled && !finished) timer = window.setTimeout(poll, 2000);
       }
-    }, 2000);
+    }
+    timer = window.setTimeout(poll, 1500);
 
-    return () => window.clearInterval(interval);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [accountType, onConfirmed, session?.session_id, session?.status]);
 
   return (
@@ -145,6 +177,7 @@ export function QrLoginPanel({ accountType, onConfirmed }: QrLoginPanelProps) {
       ) : null}
 
       {error ? <Alert type="error" message={error} showIcon /> : null}
+      {warning ? <Alert type="warning" message={warning} showIcon /> : null}
 
       <Button
         block

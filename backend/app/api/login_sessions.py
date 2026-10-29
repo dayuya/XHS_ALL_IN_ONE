@@ -3,26 +3,31 @@ from __future__ import annotations
 import base64
 import io
 import json
+from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from backend.app.adapters.xhs.creator_login_adapter import XhsCreatorLoginAdapter
 from backend.app.adapters.xhs.pc_login_adapter import XhsPcLoginAdapter
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.security import decrypt_text, encrypt_text
-from backend.app.models import LoginSession, PlatformAccount, User
+from backend.app.models import AccountCookieVersion, LoginSession, PlatformAccount, User
 from backend.app.adapters.xhs.pc_api_adapter import XhsPcApiAdapter
 from backend.app.services.account_service import (
     cookie_header_from_text,
+    decode_cookie_text,
     enrich_user_info_with_xhs_self_profile,
     serialize_account,
     upsert_platform_account_from_login,
 )
 
 router = APIRouter(prefix="/xhs/login-sessions", tags=["xhs-login-sessions"])
+_poll_locks = tuple(Lock() for _ in range(64))
+CREATOR_SYNC_WARNING = "PC 账号已绑定，Creator 自动同步未成功。可切换 Creator，单独扫码登录创作者平台。"
 
 
 class PcQrCodeRequest(BaseModel):
@@ -100,16 +105,51 @@ def _sync_creator_account_from_pc_login(
     try:
         creator_result = creator_adapter.exchange_from_user_cookies(pc_cookies)
         creator_user_info = creator_adapter.get_user_info(creator_result["cookies"])
-        creator_account, creator_action = _create_account_from_login(
-            db=db,
-            user_id=user_id,
-            sub_type="creator",
-            user_info=creator_user_info,
-            cookies=creator_result["cookies"],
-        )
+        with db.begin_nested():
+            creator_account, creator_action = _create_account_from_login(
+                db=db,
+                user_id=user_id,
+                sub_type="creator",
+                user_info=creator_user_info,
+                cookies=creator_result["cookies"],
+            )
     except Exception:
         return None
     return serialize_account(creator_account, creator_action)
+
+
+def _confirmed_response(session: LoginSession, db: Session) -> dict:
+    state = _load_json(decrypt_text(session.encrypted_temp_cookies))
+    saved = state.get("login_result", {})
+    account = db.get(PlatformAccount, saved["account_id"]) if saved.get("account_id") else None
+    creator = db.get(PlatformAccount, saved["creator_account_id"]) if saved.get("creator_account_id") else None
+    cookies, sync_creator = _load_temp_state(decrypt_text(session.encrypted_temp_cookies))
+    if account is None and not saved:
+        # Recover sessions created before result caching without remote calls.
+        identity_key = "web_session" if session.sub_type == "pc" else "customer_session"
+        identity = cookies.get(identity_key)
+        if identity:
+            versions = db.execute(
+                select(PlatformAccount, AccountCookieVersion)
+                .join(AccountCookieVersion, AccountCookieVersion.platform_account_id == PlatformAccount.id)
+                .where(PlatformAccount.user_id == session.user_id, PlatformAccount.sub_type == session.sub_type)
+                .order_by(AccountCookieVersion.id.desc())
+            )
+            for candidate, version in versions:
+                values = decode_cookie_text(decrypt_text(version.encrypted_cookies))
+                if values.get(identity_key) == identity:
+                    account = candidate
+                    break
+    return {
+        "session_id": session.id,
+        "status": session.status,
+        "qr_url": session.qr_url,
+        "account": serialize_account(account) if account and account.user_id == session.user_id else None,
+        "creator_account": serialize_account(creator) if creator and creator.user_id == session.user_id else None,
+        "creator_sync_warning": saved.get("creator_sync_warning") or (
+            CREATOR_SYNC_WARNING if session.sub_type == "pc" and sync_creator and not creator else None
+        ),
+    }
 
 
 def _create_account_from_login(
@@ -216,25 +256,38 @@ def login_session(
     pc_adapter: XhsPcLoginAdapter = Depends(get_pc_login_adapter),
     creator_adapter: XhsCreatorLoginAdapter = Depends(get_creator_login_adapter),
 ):
+    # Coalesce confirmation requests in this single-process local deployment.
+    with _poll_locks[session_id % len(_poll_locks)]:
+        return _poll_login_session(session_id, current_user, db, pc_adapter, creator_adapter)
+
+
+def _poll_login_session(session_id, current_user, db, pc_adapter, creator_adapter):
     session = db.get(LoginSession, session_id)
     if session is None or session.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Login session not found")
-    if session.status in {"confirmed", "expired"}:
+    if session.status == "confirmed":
+        return _confirmed_response(session, db)
+    if session.status == "expired":
         return {"session_id": session.id, "status": session.status, "qr_url": session.qr_url}
     if session.sub_type not in {"pc", "creator"} or not session.qr_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported login session")
 
     cookies, sync_creator = _load_temp_state(decrypt_text(session.encrypted_temp_cookies))
-    if session.sub_type == "pc":
-        if not session.code:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported login session")
-        result = pc_adapter.check_qrcode_status(session.qr_id, session.code, cookies)
-        account_sub_type = "pc"
-        user_info = pc_adapter.get_user_info(result["cookies"]) if result["status"] == "confirmed" else None
-    else:
-        result = creator_adapter.check_qrcode_status(session.qr_id, cookies)
-        account_sub_type = "creator"
-        user_info = creator_adapter.get_user_info(result["cookies"]) if result["status"] == "confirmed" else None
+    try:
+        if session.sub_type == "pc":
+            if not session.code:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported login session")
+            result = pc_adapter.check_qrcode_status(session.qr_id, session.code, cookies)
+            account_sub_type = "pc"
+            user_info = pc_adapter.get_user_info(result["cookies"]) if result["status"] == "confirmed" else None
+        else:
+            result = creator_adapter.check_qrcode_status(session.qr_id, cookies)
+            account_sub_type = "creator"
+            user_info = creator_adapter.get_user_info(result["cookies"]) if result["status"] == "confirmed" else None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="小红书登录状态检查暂时失败，请稍后重试；二维码过期后请刷新。") from exc
     session.status = result["status"]
     session.encrypted_temp_cookies = encrypt_text(
         _dump_temp_state(result["cookies"], sync_creator=sync_creator)
@@ -259,6 +312,17 @@ def login_session(
                 creator_adapter=creator_adapter,
             )
 
+    warning = CREATOR_SYNC_WARNING if account_sub_type == "pc" and sync_creator and session.status == "confirmed" and not creator_account_payload else None
+    if account_payload:
+        session.encrypted_temp_cookies = encrypt_text(_dump_json({
+            "cookies": result["cookies"],
+            "sync_creator": sync_creator,
+            "login_result": {
+                "account_id": account_payload["id"],
+                "creator_account_id": creator_account_payload["id"] if creator_account_payload else None,
+                "creator_sync_warning": warning,
+            },
+        }))
     db.commit()
     return {
         "session_id": session.id,
@@ -266,6 +330,7 @@ def login_session(
         "qr_url": session.qr_url,
         "account": account_payload,
         "creator_account": creator_account_payload,
+        "creator_sync_warning": warning,
     }
 
 

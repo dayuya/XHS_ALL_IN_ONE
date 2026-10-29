@@ -585,6 +585,119 @@ def test_xhs_pc_qrcode_login_session_persists_and_confirms_account(tmp_path):
         app.dependency_overrides.pop(get_creator_login_adapter, None)
 
 
+def test_qrcode_sync_failure_remains_successful_and_replays_account(tmp_path, monkeypatch):
+    from backend.app.api import login_sessions
+    from backend.app.core.database import get_db
+    from backend.app.core.security import encrypt_text
+    from backend.app.models import LoginSession, PlatformAccount
+
+    db_dependency = _override_database(tmp_path)
+    monkeypatch.setattr(login_sessions.XhsPcApiAdapter, "get_self_info", lambda self: {})
+    app.dependency_overrides[login_sessions.get_pc_login_adapter] = lambda: FakePcLoginAdapter()
+    app.dependency_overrides[login_sessions.get_creator_login_adapter] = lambda: FailingCreatorExchangeAdapter()
+    try:
+        headers = {"Authorization": "Bearer " + _register_and_get_access_token()}
+        created = client.post("/api/xhs/login-sessions/pc/qrcode", headers=headers, json={"sync_creator": True}).json()
+        path = f"/api/xhs/login-sessions/{created['session_id']}"
+        first = client.get(path, headers=headers)
+        assert first.status_code == 200
+        assert first.json()["creator_sync_warning"]
+        assert first.json()["account"]["sub_type"] == "pc"
+        replay = client.get(path, headers=headers)
+        assert replay.status_code == 200
+        assert replay.json()["account"]["id"] == first.json()["account"]["id"]
+        assert replay.json()["creator_sync_warning"] == first.json()["creator_sync_warning"]
+
+        # A session saved by an older version must recover the same account.
+        db = next(app.dependency_overrides[get_db]())
+        try:
+            session = db.get(LoginSession, created["session_id"])
+            session.encrypted_temp_cookies = encrypt_text(login_sessions._dump_temp_state(
+                {"a1": "final-a1", "web_session": "session-123"}, sync_creator=True,
+            ))
+            db.commit()
+            assert db.query(PlatformAccount).count() == 1
+        finally:
+            db.close()
+        legacy = client.get(path, headers=headers)
+        assert legacy.status_code == 200
+        assert legacy.json()["account"]["id"] == first.json()["account"]["id"]
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+        app.dependency_overrides.pop(login_sessions.get_pc_login_adapter, None)
+        app.dependency_overrides.pop(login_sessions.get_creator_login_adapter, None)
+
+
+def test_qrcode_creator_storage_failure_does_not_rollback_pc_login(tmp_path, monkeypatch):
+    from backend.app.api import login_sessions
+
+    db_dependency = _override_database(tmp_path)
+    monkeypatch.setattr(login_sessions.XhsPcApiAdapter, "get_self_info", lambda self: {})
+    create_account = login_sessions._create_account_from_login
+
+    def fail_after_creator_write(**kwargs):
+        result = create_account(**kwargs)
+        if kwargs["sub_type"] == "creator":
+            raise RuntimeError("simulated Creator storage failure")
+        return result
+
+    monkeypatch.setattr(login_sessions, "_create_account_from_login", fail_after_creator_write)
+    app.dependency_overrides[login_sessions.get_pc_login_adapter] = lambda: FakePcLoginAdapter()
+    app.dependency_overrides[login_sessions.get_creator_login_adapter] = lambda: FakeCreatorLoginAdapter()
+    try:
+        headers = {"Authorization": "Bearer " + _register_and_get_access_token()}
+        created = client.post("/api/xhs/login-sessions/pc/qrcode", headers=headers, json={"sync_creator": True}).json()
+        response = client.get(f"/api/xhs/login-sessions/{created['session_id']}", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["status"] == "confirmed"
+        assert response.json()["creator_sync_warning"]
+        accounts = client.get("/api/accounts", headers=headers).json()
+        assert accounts["total"] == 1
+        assert accounts["items"][0]["sub_type"] == "pc"
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+        app.dependency_overrides.pop(login_sessions.get_pc_login_adapter, None)
+        app.dependency_overrides.pop(login_sessions.get_creator_login_adapter, None)
+
+
+def test_qrcode_overlapping_polls_store_one_confirmation(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+    from backend.app.api import login_sessions
+    from backend.app.core.database import get_db
+    from backend.app.models import AccountCookieVersion
+
+    class SlowAdapter(FakePcLoginAdapter):
+        calls = 0
+
+        def check_qrcode_status(self, *args):
+            self.calls += 1
+            time.sleep(0.1)
+            return super().check_qrcode_status(*args)
+
+    db_dependency = _override_database(tmp_path)
+    adapter = SlowAdapter()
+    monkeypatch.setattr(login_sessions.XhsPcApiAdapter, "get_self_info", lambda self: {})
+    app.dependency_overrides[login_sessions.get_pc_login_adapter] = lambda: adapter
+    try:
+        headers = {"Authorization": "Bearer " + _register_and_get_access_token()}
+        created = client.post("/api/xhs/login-sessions/pc/qrcode", headers=headers).json()
+        path = f"/api/xhs/login-sessions/{created['session_id']}"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: client.get(path, headers=headers), range(2)))
+        assert all(response.status_code == 200 for response in responses)
+        assert responses[0].json()["account"]["id"] == responses[1].json()["account"]["id"]
+        assert adapter.calls == 1
+        db = next(app.dependency_overrides[get_db]())
+        try:
+            assert db.query(AccountCookieVersion).count() == 1
+        finally:
+            db.close()
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+        app.dependency_overrides.pop(login_sessions.get_pc_login_adapter, None)
+
+
 def test_xhs_pc_qrcode_login_updates_existing_account_for_same_external_user(tmp_path):
     from backend.app.api.accounts import get_pc_account_adapter
     from backend.app.api.login_sessions import get_creator_login_adapter, get_pc_login_adapter
