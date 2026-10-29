@@ -1,60 +1,32 @@
-version: "3.8"
-
+name: xhs-all-in-one
 services:
-  # --------------------------------------------------------------------------
-  # Spider_XHS Application
-  # --------------------------------------------------------------------------
   app:
+    image: xhs-all-in-one:local
     build: .
-    container_name: spider-xhs
+    container_name: xhs-all-in-one
+    init: true
     ports:
-      - "8000:8000"
+      - "0.0.0.0:18081:8000"
     volumes:
       - ./data:/app/data
-      - ./config:/app/config
-      - ./backend/app/storage/media:/app/backend/app/storage/media
-      - ./backend/app/storage/exports:/app/backend/app/storage/exports
+      - ./config:/app/config:ro
+      - ./backend/app/storage:/app/backend/app/storage
+    env_file:
+      - .env
     environment:
-      - CONFIG_FILE=/app/config/default.yaml
-      # Override sensitive values via env vars in production:
-      # - SECRET_KEY=your-production-secret-key
-      # - FERNET_KEY=your-fernet-key
-      # - DATABASE_TYPE=mysql
-      # - DATABASE_MYSQL_HOST=mysql
-      # - DATABASE_MYSQL_PASSWORD=your-mysql-password
+      CONFIG_FILE: /app/config/default.yaml
+      FRONTEND_SERVE_STATIC: "true"
+      SCHEDULER_ENABLED: "false"
+      DATABASE_SQLITE_PATH: /app/data/spider_xhs.db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
-
-  # --------------------------------------------------------------------------
-  # MySQL (optional, for production deployments)
-  # Uncomment this section and the volumes block below to use MySQL.
-  # Also set DATABASE_TYPE=mysql in the app environment.
-  # --------------------------------------------------------------------------
-  # mysql:
-  #   image: mysql:8.0
-  #   container_name: spider-xhs-mysql
-  #   environment:
-  #     MYSQL_ROOT_PASSWORD: rootpass
-  #     MYSQL_DATABASE: spider_xhs
-  #     MYSQL_USER: spider_xhs
-  #     MYSQL_PASSWORD: change_me
-  #   ports:
-  #     - "3306:3306"
-  #   volumes:
-  #     - mysql_data:/var/lib/mysql
-  #   command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-  #     start_period: 30s
-
-# volumes:
-#   mysql_data:
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

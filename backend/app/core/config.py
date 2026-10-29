@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     if hasattr(BaseSettings, "model_config"):
         model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        # YAML values are passed as init kwargs. Let the documented environment
+        # and .env overrides take priority over those defaults.
+        return env_settings, dotenv_settings, init_settings, file_secret_settings
+
     def model_post_init(self, __context: Any) -> None:
         # Build database_url from component fields if not explicitly set
         if not self.database_url:
