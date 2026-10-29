@@ -1392,6 +1392,56 @@ def test_account_check_refreshes_xhs_self_profile_metrics(tmp_path):
         app.dependency_overrides.pop(get_xhs_self_profile_adapter, None)
 
 
+def test_account_check_reads_sdk_statistics_and_keeps_them_on_optional_detail_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from backend.app.api.accounts import get_pc_account_adapter
+    from backend.app.adapters.xhs.pc_api_adapter import XhsPcApiAdapter
+
+    class Api:
+        detail_available = True
+        closed = 0
+
+        def __init__(self):
+            self.auth = SimpleNamespace(close=lambda: setattr(Api, "closed", Api.closed + 1))
+
+        def get_user_me(self):
+            return True, "ok", {"data": {"user_id": "cookie-user-1", "nickname": "cookie-cat"}}
+
+        def get_user_info(self, user_id):
+            assert user_id == "cookie-user-1"
+            return self.detail_available, "fixture", {"data": {
+                "basic_info": {},
+                "interactions": [
+                    {"type": "fans", "count": 0},
+                    {"type": "follows", "count": "12000", "i18n_count": "1.2万"},
+                    {"type": "interaction", "count": 45},
+                ],
+            }}
+
+    db_dependency = _override_database(tmp_path)
+    app.dependency_overrides[get_pc_account_adapter] = lambda: FakeCookieAccountAdapter()
+    monkeypatch.setattr(XhsPcApiAdapter, "_api", lambda self: Api())
+    try:
+        headers = {"Authorization": "Bearer " + _register_and_get_access_token("sdk-profile-owner")}
+        payload = {"platform": "xhs", "sub_type": "pc", "cookie_string": "a1=cookie-a1; web_session=fixture"}
+        imported = client.post("/api/accounts/import-cookie", headers=headers, json=payload)
+        assert imported.status_code == 200
+        account_id = imported.json()["id"]
+        Api.detail_available = False
+        checked = client.post(f"/api/accounts/{account_id}/check", headers=headers)
+        assert checked.status_code == 200
+        assert checked.json()["status"] == "active"
+        assert checked.json()["profile"]["followers"] == 0
+        assert checked.json()["profile"]["following"] == "12000"
+        assert checked.json()["profile"]["likes"] == 45
+        imported_again = client.post("/api/accounts/import-cookie", headers=headers, json=payload)
+        assert imported_again.json()["profile"]["following"] == "12000"
+        assert Api.closed == 3
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+        app.dependency_overrides.pop(get_pc_account_adapter, None)
+
+
 def test_account_check_enforces_ownership_and_marks_expired_on_adapter_failure(tmp_path):
     from backend.app.api.accounts import get_pc_account_adapter
 

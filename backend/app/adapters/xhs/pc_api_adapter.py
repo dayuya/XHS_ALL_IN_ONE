@@ -53,8 +53,22 @@ class XhsPcApiAdapter:
 
     def get_self_info(self) -> Any:
         with direct_xhs_request_env():
-            success, message, res_json = self._api().get_user_me()
-        payload = (res_json or {}).get("data") if isinstance(res_json, dict) else None
-        if not success or not payload:
-            raise RuntimeError(message or "XHS self profile refresh failed")
-        return payload
+            api = self._api()
+            try:
+                success, message, res_json = api.get_user_me()
+                payload = res_json.get("data") if isinstance(res_json, dict) else None
+                if not success or not isinstance(payload, dict) or not payload:
+                    raise RuntimeError(message or "XHS self profile refresh failed")
+                # user/me only contains identity fields. Statistics are served
+                # by otherinfo; use the authenticated user's id and client.
+                user_id = payload.get("user_id")
+                if user_id:
+                    try:
+                        detail_success, _, detail = api.get_user_info(user_id)
+                        if detail_success and isinstance(detail, dict) and isinstance(detail.get("data"), dict):
+                            return detail
+                    except Exception:
+                        pass  # An optional statistics failure must not invalidate login.
+                return res_json
+            finally:
+                api.auth.close()

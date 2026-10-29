@@ -282,7 +282,7 @@ export function XhsAccountsPage() {
                         </Col>
                         <Col span={6}>
                           <Statistic
-                            title={<span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>获赞</span>}
+                            title={<span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>获赞与收藏</span>}
                             value={profileValue(account, "likes") || "-"}
                             valueStyle={{ color: "rgba(255,255,255,0.88)", fontSize: 14 }}
                           />

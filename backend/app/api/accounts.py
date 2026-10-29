@@ -20,10 +20,10 @@ from backend.app.core.time import shanghai_now
 from backend.app.models import AccountCookieVersion, PlatformAccount, User
 from backend.app.schemas.common import paginated
 from backend.app.services.account_service import (
-    account_profile_from_user_info,
     cookie_header_from_text,
     decode_cookie_text,
     enrich_user_info_with_xhs_self_profile,
+    merged_account_profile,
     serialize_account,
     upsert_platform_account_from_login,
 )
@@ -187,7 +187,7 @@ def check_account(
         account.nickname = user_info.get("nickname", account.nickname)
         account.avatar_url = user_info.get("avatar_url", account.avatar_url)
         account.external_user_id = user_info.get("external_user_id", account.external_user_id)
-        account.profile_json = json.dumps(account_profile_from_user_info(user_info), ensure_ascii=False, separators=(",", ":"))
+        account.profile_json = json.dumps(merged_account_profile(account, user_info), ensure_ascii=False, separators=(",", ":"))
         account.updated_at = shanghai_now()
 
         if account.sub_type == "creator":

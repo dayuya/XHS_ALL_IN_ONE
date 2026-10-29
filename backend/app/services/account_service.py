@@ -48,12 +48,12 @@ def _first_present(*values: Any) -> Any:
 
 
 def enrich_user_info_with_xhs_self_profile(user_info: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
-    data = response.get("data") if isinstance(response, dict) else {}
+    data = response.get("data", response) if isinstance(response, dict) else {}
     if not isinstance(data, dict):
         return user_info
     basic_info = data.get("basic_info")
     if not isinstance(basic_info, dict):
-        basic_info = {}
+        basic_info = data
 
     interaction_counts: dict[str, Any] = {}
     interactions = data.get("interactions")
@@ -63,7 +63,7 @@ def enrich_user_info_with_xhs_self_profile(user_info: dict[str, Any], response: 
                 continue
             interaction_type = item.get("type")
             if interaction_type:
-                interaction_counts[str(interaction_type)] = _first_present(item.get("i18n_count"), item.get("count"))
+                interaction_counts[str(interaction_type)] = _first_present(item.get("count"), item.get("i18n_count"))
 
     profile = {
         **account_profile_from_user_info(user_info),
@@ -84,13 +84,27 @@ def enrich_user_info_with_xhs_self_profile(user_info: dict[str, Any], response: 
     }
 
 
-def serialize_account(account: PlatformAccount, action: str | None = None) -> dict[str, Any]:
+def _stored_account_profile(account: PlatformAccount) -> dict[str, Any]:
     try:
         profile = json.loads(account.profile_json or "{}")
         if not isinstance(profile, dict):
             profile = {}
     except json.JSONDecodeError:
         profile = {}
+    return profile
+
+
+def merged_account_profile(account: PlatformAccount, user_info: dict[str, Any]) -> dict[str, Any]:
+    profile = _stored_account_profile(account)
+    profile.update({
+        key: value for key, value in account_profile_from_user_info(user_info).items()
+        if value is not None and value != ""
+    })
+    return profile
+
+
+def serialize_account(account: PlatformAccount, action: str | None = None) -> dict[str, Any]:
+    profile = _stored_account_profile(account)
 
     payload = {
         "id": account.id,
@@ -148,7 +162,7 @@ def upsert_platform_account_from_login(
     account.external_user_id = external_user_id or account.external_user_id
     account.status = "active"
     account.status_message = ""
-    account.profile_json = json.dumps(account_profile_from_user_info(user_info), ensure_ascii=False, separators=(",", ":"))
+    account.profile_json = json.dumps(merged_account_profile(account, user_info), ensure_ascii=False, separators=(",", ":"))
     account.updated_at = now
     db.flush()
     db.add(
