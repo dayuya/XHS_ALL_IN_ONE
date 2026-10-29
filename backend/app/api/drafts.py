@@ -10,10 +10,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.app.core.config import get_settings
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.models import AiDraft, DraftAsset, Note, NoteAsset, PlatformAccount, PublishAsset, PublishJob, User
 from backend.app.schemas.common import paginated
+from backend.app.services.media_paths import media_preview_url
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -219,10 +221,7 @@ def send_draft_to_publish(
         select(DraftAsset).where(DraftAsset.draft_id == draft.id).order_by(DraftAsset.sort_order.asc(), DraftAsset.id.asc())
     ).all()
     for da in draft_assets:
-        if da.local_path:
-            file_path = f"/api/files/media/{da.local_path}"
-        else:
-            file_path = da.url
+        file_path = _draft_asset_display_url(da)
         pa = PublishAsset(
             publish_job_id=job.id,
             asset_type=da.asset_type,
@@ -281,8 +280,13 @@ def delete_draft(
 # Draft assets
 # ---------------------------------------------------------------------------
 
+def _draft_asset_display_url(asset: DraftAsset) -> str:
+    media_dir = get_settings().storage_dir / "media"
+    return media_preview_url(asset.local_path or "", media_dir) or media_preview_url(asset.url or "", media_dir) or ""
+
+
 def _serialize_draft_asset(asset: DraftAsset) -> dict:
-    display_url = f"/api/files/media/{asset.local_path}" if asset.local_path else asset.url
+    display_url = _draft_asset_display_url(asset)
     return {
         "id": asset.id,
         "draft_id": asset.draft_id,

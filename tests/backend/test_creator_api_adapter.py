@@ -45,3 +45,16 @@ def test_upload_permission_closes_auth_on_request_failure(monkeypatch):
     with pytest.raises(RuntimeError, match="temporary request failure"):
         XhsCreatorApiAdapter("fixture").check_upload_permission()
     assert calls == ["closed"]
+
+
+def test_upload_reads_encoded_nested_media_url_without_uploading(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from urllib.parse import quote
+    from backend.app.core import config
+
+    image = tmp_path / "media" / "示例图" / "cover #1.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"fixture-image")
+    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(storage_dir=tmp_path))
+    url = "/api/files/media/" + quote(image.relative_to(tmp_path / "media").as_posix(), safe="/")
+    assert XhsCreatorApiAdapter._resolve_file_data(url) == b"fixture-image"

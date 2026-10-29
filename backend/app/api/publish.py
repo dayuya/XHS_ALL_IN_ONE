@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -19,6 +17,7 @@ from backend.app.core.security import decrypt_text
 from backend.app.core.time import shanghai_now
 from backend.app.models import AccountCookieVersion, PlatformAccount, PublishAsset, PublishJob, Task, User
 from backend.app.schemas.common import paginated
+from backend.app.services.media_paths import media_preview_url
 
 router = APIRouter(prefix="/publish", tags=["publish"])
 
@@ -132,13 +131,7 @@ def serialize_publish_job(job: PublishJob) -> dict:
 
 
 def _publish_asset_preview_url(file_path: str) -> str | None:
-    if file_path.startswith(("http://", "https://", "/api/files/media/")):
-        return file_path
-    media_dir = (get_settings().storage_dir / "media").resolve()
-    local_path = Path(file_path).resolve()
-    if local_path.parent == media_dir:
-        return f"/api/files/media/{quote(local_path.name)}"
-    return None
+    return media_preview_url(file_path, get_settings().storage_dir / "media")
 
 
 def serialize_publish_asset(asset: PublishAsset) -> dict:

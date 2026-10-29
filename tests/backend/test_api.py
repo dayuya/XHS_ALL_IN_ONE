@@ -4265,6 +4265,61 @@ def test_blank_draft_media_and_topics_survive_reload_and_send_to_publish(tmp_pat
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_draft_previews_serve_absolute_and_nested_media_without_rewriting_stored_paths(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from urllib.parse import quote
+    from PIL import Image
+    from backend.app.api import drafts, files, publish
+
+    storage = tmp_path / "storage"
+    media = storage / "media"
+    nested = media / "示例图" / "封面 #1%.png"
+    nested.parent.mkdir(parents=True)
+    Image.new("RGB", (12, 12), "blue").save(nested)
+    flat = media / "cover.png"
+    Image.new("RGB", (12, 12), "red").save(flat)
+    settings = SimpleNamespace(storage_dir=storage)
+    for module in (drafts, files, publish):
+        monkeypatch.setattr(module, "get_settings", lambda: settings)
+    db_dependency = _override_database(tmp_path)
+    try:
+        headers = {"Authorization": "Bearer " + _register_and_get_access_token("draft-preview-owner")}
+        draft_response = client.post("/api/drafts", headers=headers, json={"platform": "xhs"})
+        draft_url = f"/api/drafts/{draft_response.json()['id']}"
+        nested_url = "/api/files/media/" + quote(nested.relative_to(media).as_posix(), safe="/")
+        fixtures = [
+            (str(flat), "/api/files/media/cover.png"),
+            ("cover.png", "/api/files/media/cover.png"),
+            (str(nested), nested_url),
+            (nested.relative_to(media).as_posix(), nested_url),
+            (nested_url, nested_url),
+        ]
+        for stored, expected in fixtures:
+            added = client.post(f"{draft_url}/assets", headers=headers, json={
+                "asset_type": "image", "url": "/api/files/media/wrong-fallback.png", "local_path": stored,
+            })
+            assert added.status_code == 200
+            assert added.json()["url"] == expected
+            assert added.json()["local_path"] == stored
+            preview = client.get(expected)
+            assert preview.status_code == 200
+            assert preview.content == (nested if expected == nested_url else flat).read_bytes()
+        listed = client.get(f"{draft_url}/assets", headers=headers).json()["items"]
+        assert [item["local_path"] for item in listed] == [stored for stored, _ in fixtures]
+        job = client.post(f"{draft_url}/send-to-publish", headers=headers, json={}).json()
+        assert job["status"] == "pending"
+        assets = client.get(f"/api/publish/jobs/{job['id']}/assets", headers=headers).json()["items"]
+        assert [item["file_path"] for item in assets] == [expected for _, expected in fixtures]
+        assert [item["preview_url"] for item in assets] == [expected for _, expected in fixtures]
+
+        outside = storage / "private.png"
+        outside.write_bytes(b"private fixture")
+        for requested in ("%2e%2e/private.png", "%2e%2e%2fprivate.png"):
+            assert client.get(f"/api/files/media/{requested}").status_code == 404
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
 def test_drafts_api_rejects_cross_user_source_note(tmp_path):
     db_dependency, owner_token, owner_account_id = _create_pc_account_with_cookie(tmp_path, "draft-source-owner")
     intruder_token = _register_and_get_access_token("draft-source-intruder")

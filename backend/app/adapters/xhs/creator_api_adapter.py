@@ -62,8 +62,8 @@ class XhsCreatorApiAdapter:
             raw_bytes = resp.content
         elif file_path.startswith("/api/files/media/"):
             from backend.app.core.config import get_settings
-            file_name = file_path.split("/")[-1]
-            local = pathlib.Path(get_settings().storage_dir) / "media" / file_name
+            from backend.app.services.media_paths import resolve_media_path
+            local = resolve_media_path(file_path, pathlib.Path(get_settings().storage_dir) / "media")
             if local.is_file():
                 raw_bytes = local.read_bytes()
         else:

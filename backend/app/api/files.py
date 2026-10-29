@@ -12,6 +12,7 @@ from backend.app.core.config import get_settings
 from backend.app.core.deps import get_current_user
 from backend.app.models import User
 from backend.app.services.image_util import compose_cover_image, resize_image_file
+from backend.app.services.media_paths import resolve_media_path
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -146,14 +147,15 @@ def resize_image(payload: ResizeImageRequest, current_user: User = Depends(get_c
     return _serialize_media_file(file_name=file_name, width=payload.width, height=payload.height)
 
 
-@router.get("/media/{file_name}")
+@router.get("/media/{file_name:path}")
 def download_media(file_name: str):
-    if Path(file_name).name != file_name or ".." in file_name:
+    try:
+        file_path = resolve_media_path(file_name, _media_dir())
+    except (ValueError, OSError, RuntimeError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
-    file_path = _media_dir() / file_name
     if not file_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
-    return FileResponse(file_path, filename=file_name, media_type=_media_type(file_name))
+    return FileResponse(file_path, filename=file_path.name, media_type=_media_type(file_name))
 
 
 @router.get("/exports/{file_name}")
