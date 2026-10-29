@@ -421,7 +421,7 @@ export function XhsPublishPage() {
                                 {imageAssets.map((asset) => (
                                   <Image
                                     key={asset.id}
-                                    src={asset.file_path}
+                                    src={asset.preview_url ?? asset.file_path}
                                     width={80}
                                     height={80}
                                     style={{ objectFit: "cover", borderRadius: 6 }}
@@ -441,7 +441,7 @@ export function XhsPublishPage() {
                             </Text>
                             <Space wrap>
                               {videoAssets.map((asset) => (
-                                <Button key={asset.id} type="link" icon={<PlayCircleOutlined />} href={asset.file_path} target="_blank" rel="noreferrer" size="small">
+                                <Button key={asset.id} type="link" icon={<PlayCircleOutlined />} href={asset.preview_url ?? asset.file_path} target="_blank" rel="noreferrer" size="small">
                                   查看视频
                                 </Button>
                               ))}

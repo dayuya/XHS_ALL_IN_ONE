@@ -5379,6 +5379,62 @@ def test_publish_assets_api_adds_lists_and_deletes_owned_assets(tmp_path):
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_publish_local_asset_preview_is_downloadable_and_preserves_upload_path(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from PIL import Image
+    from backend.app.api import files, publish
+    from backend.app.core.database import get_db
+    from backend.app.models import PublishAsset, PublishJob
+
+    storage = tmp_path / "storage"
+    media = storage / "media"
+    media.mkdir(parents=True)
+    image_path = media / "fixture-cover.png"
+    Image.new("RGB", (12, 12), "blue").save(image_path)
+    settings = SimpleNamespace(storage_dir=storage)
+    monkeypatch.setattr(files, "get_settings", lambda: settings)
+    monkeypatch.setattr(publish, "get_settings", lambda: settings)
+    db_dependency = _override_database(tmp_path)
+    try:
+        headers = {"Authorization": "Bearer " + _register_and_get_access_token("preview-owner")}
+        db = next(app.dependency_overrides[get_db]())
+        try:
+            job = PublishJob(user_id=1, platform="xhs", title="Preview", status="pending")
+            db.add(job)
+            db.flush()
+            job_id = job.id
+            db.add(PublishAsset(
+                publish_job_id=job.id, asset_type="image", file_path=str(image_path.resolve()),
+                upload_status="uploaded", creator_media_id="fixture-media-id",
+            ))
+            db.commit()
+        finally:
+            db.close()
+        response = client.get(f"/api/publish/jobs/{job_id}/assets", headers=headers)
+        assert response.status_code == 200
+        asset = response.json()["items"][0]
+        assert asset["file_path"] == str(image_path.resolve())
+        assert asset["upload_status"] == "uploaded"
+        assert asset["creator_media_id"] == "fixture-media-id"
+        assert asset["preview_url"] == "/api/files/media/fixture-cover.png"
+        preview = client.get(asset["preview_url"])
+        assert preview.status_code == 200
+        assert preview.headers["content-type"].startswith("image/png")
+        assert preview.content == image_path.read_bytes()
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_publish_preview_does_not_expose_files_outside_media_storage(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from backend.app.api import publish
+
+    monkeypatch.setattr(publish, "get_settings", lambda: SimpleNamespace(storage_dir=tmp_path / "storage"))
+    assert publish._publish_asset_preview_url(str(tmp_path / "private.png")) is None
+    assert publish._publish_asset_preview_url("https://example.test/cover.png") == "https://example.test/cover.png"
+    assert publish._publish_asset_preview_url("/api/files/media/cover.png") == "/api/files/media/cover.png"
+
+
 def test_publish_asset_upload_requires_authentication(tmp_path):
     db_dependency = _override_database(tmp_path)
     try:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -11,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.adapters.xhs.creator_api_adapter import XhsCreatorApiAdapter
 from backend.app.core.database import get_db
+from backend.app.core.config import get_settings
 from backend.app.core.deps import get_current_user
 from backend.app.core.security import decrypt_text
 from backend.app.core.time import shanghai_now
@@ -128,6 +131,16 @@ def serialize_publish_job(job: PublishJob) -> dict:
     }
 
 
+def _publish_asset_preview_url(file_path: str) -> str | None:
+    if file_path.startswith(("http://", "https://", "/api/files/media/")):
+        return file_path
+    media_dir = (get_settings().storage_dir / "media").resolve()
+    local_path = Path(file_path).resolve()
+    if local_path.parent == media_dir:
+        return f"/api/files/media/{quote(local_path.name)}"
+    return None
+
+
 def serialize_publish_asset(asset: PublishAsset) -> dict:
     try:
         creator_upload_info = json.loads(asset.creator_upload_info or "{}")
@@ -138,6 +151,7 @@ def serialize_publish_asset(asset: PublishAsset) -> dict:
         "publish_job_id": asset.publish_job_id,
         "asset_type": asset.asset_type,
         "file_path": asset.file_path,
+        "preview_url": _publish_asset_preview_url(asset.file_path),
         "upload_status": asset.upload_status,
         "creator_media_id": asset.creator_media_id,
         "upload_error": asset.upload_error,

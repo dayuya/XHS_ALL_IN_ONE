@@ -629,6 +629,7 @@ export type PublishAsset = {
   publish_job_id: number;
   asset_type: "image" | "video" | string;
   file_path: string;
+  preview_url?: string | null;
   upload_status: "pending" | "uploading" | "uploaded" | "failed" | string;
   creator_media_id: string;
   upload_error: string;

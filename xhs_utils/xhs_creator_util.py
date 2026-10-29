@@ -40,7 +40,7 @@ signature_js = LazyStaticJS('xhs_creator_signature.js')
 sign_js = LazyStaticJS('xhs_creator_sign.js')
 
 _CREATOR_RAP_TPL_PATH = os.path.join(
-    _STATIC_DIR, '..', 'xhs_utils', 'xhs_creator', 'js', 'rap_fingerprint_creator.json',
+    _STATIC_DIR, 'rap_fingerprint_creator.json',
 )
 _ALPHABET36 = '0123456789abcdefghijklmnopqrstuvwxyz'
 
