@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.xhs.creator_login_adapter import XhsCreatorLoginAdapter
+from backend.app.adapters.xhs.creator_api_adapter import XhsCreatorApiAdapter
 from backend.app.adapters.xhs.pc_api_adapter import XhsPcApiAdapter
 from backend.app.adapters.xhs.pc_login_adapter import XhsPcLoginAdapter
 from backend.app.core.database import get_db
@@ -28,6 +30,7 @@ from backend.app.services.account_service import (
 from xhs_utils.cookie_util import trans_cookies
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
+logger = logging.getLogger(__name__)
 
 
 class CookieImportRequest(BaseModel):
@@ -189,16 +192,14 @@ def check_account(
 
         if account.sub_type == "creator":
             try:
-                from apis.xhs_creator_apis import XHS_Creator_Apis
-                creator_cookies = decode_cookie_text(cookies_text)
-                api = XHS_Creator_Apis()
-                success, msg, _ = api.get_fileIds("image", creator_cookies)
+                success, msg = XhsCreatorApiAdapter(
+                    cookie_header_from_text(cookies_text)
+                ).check_upload_permission()
                 if not success:
-                    account.status = "expired"
-                    account.status_message = f"上传凭证获取失败: {msg}"
-            except Exception as upload_exc:
-                account.status = "expired"
-                account.status_message = f"上传凭证验证异常: {upload_exc}"
+                    account.status_message = f"Creator 登录有效，但上传凭证检查失败：{msg}"
+            except Exception:
+                logger.exception("Creator upload permission check failed for account id=%s", account.id)
+                account.status_message = "Creator 登录有效，上传凭证检查暂未完成，请稍后重试。"
     except Exception as exc:
         account.status = "expired"
         account.status_message = str(exc)

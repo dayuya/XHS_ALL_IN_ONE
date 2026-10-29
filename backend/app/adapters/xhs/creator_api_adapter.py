@@ -28,6 +28,20 @@ class XhsCreatorApiAdapter:
         with direct_xhs_request_env():
             return self._api().get_all_posted_notes()
 
+    def check_upload_permission(self) -> tuple[bool, str]:
+        with direct_xhs_request_env():
+            api = self._api()
+            try:
+                # Authentication belongs to the client, not the proxies
+                # argument of get_file_ids(). This request uploads no media.
+                success, message, result = api.get_file_ids("image")
+                if not success and isinstance(result, tuple) and isinstance(result[0], dict):
+                    body = result[0]
+                    message = body.get("msg") or body.get("message") or "上传凭证暂不可用"
+                return success, message
+            finally:
+                api.auth.close()
+
     def upload_media(self, file_path: str, media_type: str) -> dict[str, Any]:
         file_data = self._resolve_file_data(file_path)
         with direct_xhs_request_env():

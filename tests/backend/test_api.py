@@ -1231,6 +1231,70 @@ def test_account_cookie_import_creates_account_and_health_check_updates_status(t
         app.dependency_overrides.pop(get_creator_account_adapter, None)
 
 
+def test_creator_account_check_clears_sdk_error_and_keeps_login_valid_on_permit_failure(tmp_path, monkeypatch):
+    from backend.app.api import accounts as account_routes
+    from backend.app.core.database import get_db
+    from backend.app.models import PlatformAccount
+
+    class UploadChecker:
+        result = (True, "ok")
+        fail = False
+
+        def __init__(self, cookie_header):
+            assert "customer_session=session-456" in cookie_header
+
+        def check_upload_permission(self):
+            if self.fail:
+                raise TypeError("simulated SDK compatibility failure")
+            return self.result
+
+    class SelfProfile:
+        def get_self_profile(self, cookies):
+            return {}
+
+    db_dependency = _override_database(tmp_path)
+    monkeypatch.setattr(account_routes, "XhsCreatorApiAdapter", UploadChecker)
+    app.dependency_overrides[account_routes.get_creator_account_adapter] = lambda: FakeCreatorLoginAdapter()
+    app.dependency_overrides[account_routes.get_xhs_self_profile_adapter] = lambda: SelfProfile()
+    try:
+        headers = {"Authorization": "Bearer " + _register_and_get_access_token("creator-health")}
+        imported = client.post("/api/accounts/import-cookie", headers=headers, json={
+            "platform": "xhs", "sub_type": "creator",
+            "cookie_string": "a1=creator-final-a1; customer_session=session-456",
+        })
+        assert imported.status_code == 200
+        account_id = imported.json()["id"]
+        db = next(app.dependency_overrides[get_db]())
+        try:
+            account = db.get(PlatformAccount, account_id)
+            account.status = "expired"
+            account.status_message = "old constructor error"
+            db.commit()
+        finally:
+            db.close()
+
+        path = f"/api/accounts/{account_id}/check"
+        checked = client.post(path, headers=headers)
+        assert checked.status_code == 200
+        assert checked.json()["status"] == "active"
+        assert checked.json()["status_message"] == ""
+
+        UploadChecker.result = (False, "temporarily unavailable")
+        checked = client.post(path, headers=headers)
+        assert checked.json()["status"] == "active"
+        assert "登录有效" in checked.json()["status_message"]
+
+        UploadChecker.fail = True
+        checked = client.post(path, headers=headers)
+        assert checked.json()["status"] == "active"
+        assert "登录有效" in checked.json()["status_message"]
+        assert "TypeError" not in checked.json()["status_message"]
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+        app.dependency_overrides.pop(account_routes.get_creator_account_adapter, None)
+        app.dependency_overrides.pop(account_routes.get_xhs_self_profile_adapter, None)
+
+
 def test_account_cookie_import_for_pc_can_optionally_sync_creator_account(tmp_path):
     from backend.app.api.accounts import get_creator_account_adapter, get_pc_account_adapter
     from backend.app.core.database import get_db
