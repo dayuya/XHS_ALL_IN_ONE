@@ -1,4 +1,5 @@
 from backend.app.models.ai import DEFAULT_TEXT_MODEL_NAME, AiDraft, AiGeneratedAsset, DraftAsset, ModelConfig
+from backend.app.models.account_note import AccountNote, AccountNoteSync
 from backend.app.models.api_log import ApiLog
 from backend.app.models.auto_task import AutoTask
 from backend.app.models.keyword_group import KeywordGroup
@@ -12,6 +13,8 @@ from backend.app.models.task import Task
 from backend.app.models.user import User
 
 __all__ = [
+    "AccountNote",
+    "AccountNoteSync",
     "AccountCookieVersion",
     "AiDraft",
     "AiGeneratedAsset",

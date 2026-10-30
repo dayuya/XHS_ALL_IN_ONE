@@ -10,6 +10,7 @@ import { SettingsPage } from "../pages/settings/settings-page";
 import { TaskCenterPage } from "../pages/tasks/task-center-page";
 import { AutoOpsPage } from "../pages/platforms/xhs/auto-ops-page";
 import { XhsAccountsPage } from "../pages/platforms/xhs/accounts-page";
+import { XhsAccountNotesPage } from "../pages/platforms/xhs/account-notes-page";
 import { XhsAnalyticsPage } from "../pages/platforms/xhs/analytics-page";
 import { XhsBenchmarksPage } from "../pages/platforms/xhs/benchmarks-page";
 import { XhsDashboard } from "../pages/platforms/xhs/xhs-dashboard";
@@ -62,6 +63,7 @@ export function AppRouter() {
         >
           <Route path="/platforms/xhs/dashboard" element={<XhsDashboard />} />
           <Route path="/platforms/xhs/accounts" element={<XhsAccountsPage />} />
+          <Route path="/platforms/xhs/notes" element={<XhsAccountNotesPage />} />
           <Route path="/platforms/xhs/analytics" element={<XhsAnalyticsPage />} />
           <Route path="/platforms/xhs/discovery" element={<XhsDiscoveryPage />} />
           <Route path="/platforms/xhs/crawler" element={<XhsCrawlerPage />} />

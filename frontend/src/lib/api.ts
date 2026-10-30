@@ -1,5 +1,6 @@
 import axios from "axios";
 import { message } from "antd";
+import type { AccountNotesQuery, AccountNotesResponse, NoteAccount } from "../types/account-notes";
 
 import { fallbackPlatforms } from "./platforms";
 import type {
@@ -81,6 +82,18 @@ const http = axios.create({
   baseURL: "/api",
   timeout: 120000,
 });
+
+export async function fetchNoteAccounts(): Promise<{ items: NoteAccount[] }> {
+  return (await http.get<{ items: NoteAccount[] }>("/xhs/account-notes/accounts")).data;
+}
+
+export async function fetchAccountNotes(accountId: number, params: AccountNotesQuery): Promise<AccountNotesResponse> {
+  return (await http.get<AccountNotesResponse>(`/xhs/account-notes/${accountId}/notes`, { params })).data;
+}
+
+export async function syncAccountNotes(accountId: number): Promise<{ synced_count: number; account: NoteAccount }> {
+  return (await http.post<{ synced_count: number; account: NoteAccount }>(`/xhs/account-notes/${accountId}/sync`, {}, { timeout: 240000 })).data;
+}
 
 const REFRESH_TOKEN_KEY = "spider_xhs_refresh_token";
 let accessToken: string | null = null;
