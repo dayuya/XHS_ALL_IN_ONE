@@ -14,6 +14,7 @@ from backend.app.core.security import decrypt_text
 from backend.app.core.time import shanghai_now
 from backend.app.models import AccountCookieVersion, AccountNote, AccountNoteSync, PlatformAccount, User
 from backend.app.schemas.common import paginated
+from backend.app.schemas.account_notes import ManagedNoteList, NoteAccountList, NoteSyncResult
 from backend.app.services.account_notes_service import (
     account_groups, account_key, account_summary, normalize_account_note, serialize_note,
 )
@@ -34,12 +35,14 @@ def _owned_group(db: Session, user: User, account_id: int) -> list[PlatformAccou
     raise HTTPException(404, "账号不存在")
 
 
-@router.get("/accounts")
+@router.get("/accounts", response_model=NoteAccountList, summary="获取各账号笔记汇总",
+            description="仅返回当前用户的账号。同一小红书号的 PC 和 Creator 登录合并。此接口读取本地数据，不触发远端同步。")
 def list_note_accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return {"items": [account_summary(db, group) for group in account_groups(db, user.id)]}
 
 
-@router.get("/{account_id}/notes")
+@router.get("/{account_id}/notes", response_model=ManagedNoteList, summary="查询账号笔记列表",
+            description="支持标题搜索、图文/视频筛选、历史范围筛选、互动排序和分页。指标为 null 表示未返回，不代表零。")
 def list_account_notes(
     account_id: int, q: str = Query("", max_length=128),
     media_type: Literal["all", "image", "video"] = "all",
@@ -62,7 +65,8 @@ def list_account_notes(
     return {**paginated([serialize_note(row) for row in rows], page, page_size), "account": account_summary(db, group)}
 
 
-@router.post("/{account_id}/sync")
+@router.post("/{account_id}/sync", response_model=NoteSyncResult, summary="同步指定账号的笔记",
+             description="优先使用 Creator 完整同步；不可用时尝试 PC 主页。失败保留历史结果；同一账号正在同步时返回409。只读取远端笔记。")
 def sync_account_notes(
     account_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db),
     adapter=Depends(get_account_notes_adapter),

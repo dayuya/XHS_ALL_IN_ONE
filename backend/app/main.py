@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.api import account_notes, accounts, ai, auth, auto_tasks, drafts, files, keyword_groups, login_sessions, model_configs, notes, notifications, publish, tags, tasks
 from backend.app.api.platforms import registry
 from backend.app.api.platforms.xhs import analytics, crawl, creator, monitoring, pc
+from backend.app.api.docs import API_DESCRIPTION, API_TAGS, router as docs_router
 from backend.app.core.config import get_settings
 from backend.app.core.database import init_db
 from backend.app.services.scheduler_service import run_due_auto_tasks, shutdown_due_publish_scheduler, start_due_publish_scheduler
@@ -31,7 +32,11 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.api_title, lifespan=lifespan)
+    app = FastAPI(
+        title=settings.api_title, description=API_DESCRIPTION, lifespan=lifespan,
+        docs_url=None, redoc_url=None, openapi_url="/api/openapi.json", openapi_tags=API_TAGS,
+    )
+    app.include_router(docs_router)
 
     origins = [origin.strip() for origin in settings.backend_cors_origins.split(",") if origin.strip()]
     app.add_middleware(

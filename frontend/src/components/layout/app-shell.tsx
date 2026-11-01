@@ -1,5 +1,6 @@
 import {
   AimOutlined,
+  ApiOutlined,
   BarChartOutlined,
   BellOutlined,
   CloudDownloadOutlined,
@@ -69,6 +70,7 @@ const mainNavItems: MenuProps["items"] = [
 ];
 
 const footerNavItems: MenuProps["items"] = [
+  { key: "api-docs", icon: <ApiOutlined />, label: <a href="/api/docs" target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()}>API 文档</a> },
   { key: "/tasks", icon: <ScheduleOutlined />, label: "任务中心" },
   { key: "/models", icon: <RobotOutlined />, label: "模型配置" },
   { key: "/settings", icon: <SettingOutlined />, label: "设置" },
@@ -105,7 +107,10 @@ export function AppShell() {
 
   const handleMarkRead = async (id: number) => { await markNotificationRead(id); void loadNotifications(); };
   const handleMarkAllRead = async () => { await markAllNotificationsRead(); void loadNotifications(); };
-  const handleMenuClick: MenuProps["onClick"] = ({ key }) => { navigate(key); };
+  const handleMenuClick: MenuProps["onClick"] = ({ key }) => {
+    if (key === "api-docs") window.open("/api/docs", "_blank", "noopener,noreferrer");
+    else navigate(key);
+  };
   const selectedKeys = [location.pathname];
 
   const notificationDropdownContent = (

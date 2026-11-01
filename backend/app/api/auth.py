@@ -4,6 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -49,7 +50,7 @@ def _token_response(user: User) -> dict:
     }
 
 
-@router.post("/register")
+@router.post("/register", response_model=TokenResponse, summary="注册平台账号")
 def register(credentials: AuthCredentials, db: Session = Depends(get_db)):
     username = credentials.username.strip()
     existing_user = db.scalar(select(User).where(User.username == username))
@@ -63,13 +64,24 @@ def register(credentials: AuthCredentials, db: Session = Depends(get_db)):
     return _token_response(user)
 
 
-@router.post("/login")
-def login(credentials: AuthCredentials, db: Session = Depends(get_db)):
-    username = credentials.username.strip()
-    user = db.scalar(select(User).where(User.username == username))
-    if user is None or not verify_password(credentials.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+def _authenticate(username: str, password: str, db: Session) -> dict:
+    if len(username) > 80 or len(password) > 128:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    user = db.scalar(select(User).where(User.username == username.strip()))
+    if user is None or not verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password", headers={"WWW-Authenticate": "Bearer"})
     return _token_response(user)
+
+
+@router.post("/login", response_model=TokenResponse, summary="平台登录（JSON）")
+def login(credentials: AuthCredentials, db: Session = Depends(get_db)):
+    return _authenticate(credentials.username, credentials.password, db)
+
+
+@router.post("/token", response_model=TokenResponse, summary="Swagger / OAuth2 表单登录",
+             description="在线文档的 Authorize 使用此接口；用户名和密码为本平台账号。")
+def token(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    return _authenticate(form.username, form.password, db)
 
 
 @router.post("/refresh")
@@ -89,6 +101,6 @@ def logout():
     return {"status": "ok"}
 
 
-@router.get("/me")
+@router.get("/me", response_model=UserResponse, summary="获取当前平台用户")
 def me(current_user: User = Depends(get_current_user)):
     return _serialize_user(current_user)
