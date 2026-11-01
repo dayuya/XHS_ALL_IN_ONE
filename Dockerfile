@@ -23,9 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=node-deps /usr/local/bin/node /usr/local/bin/node
+COPY requirements.txt requirements-lock.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c requirements-lock.txt
 COPY --from=node-deps /build/node_modules ./node_modules
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 RUN mkdir -p /app/data /app/backend/app/storage/media /app/backend/app/storage/exports
